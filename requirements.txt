@@ -1,0 +1,7 @@
+pywin32>=306
+pillow>=10.0.0
+tkinterdnd2>=0.3.0
+pdf2image>=1.16.0
+svgwrite>=1.4.0
+requests>=2.31.0
+pyinstaller>=6.0.0
