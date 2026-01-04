@@ -6,8 +6,6 @@ import tempfile
 import win32com.client
 import pythoncom
 import threading
-import json
-import time
 
 try:
     from tkinterdnd2 import TkinterDnD, DND_FILES
@@ -109,70 +107,48 @@ class PPTXConverter:
             threading.Thread(target=self.convert, args=(f,), daemon=True).start()
 
     def convert(self, file_path):
-        # #region agent log
-        log_path = r"c:\Users\jgrae\projects\pptx-to-picture\.cursor\debug.log"
-        def log_debug(location, message, data, hypothesis_id):
-            try:
-                os.makedirs(os.path.dirname(log_path), exist_ok=True)
-                with open(log_path, "a", encoding="utf-8") as f:
-                    json.dump({"sessionId": "debug-session", "runId": "run1", "hypothesisId": hypothesis_id, "location": location, "message": message, "data": data, "timestamp": int(time.time() * 1000)}, f, ensure_ascii=False)
-                    f.write("\n")
-            except Exception as e:
-                try:
-                    with open(log_path + ".error", "a", encoding="utf-8") as f:
-                        f.write(f"Log error: {str(e)}\n")
-                except:
-                    pass
-        # #endregion
         try:
             self.log_msg(f"Converting: {os.path.basename(file_path)}")
-            # #region agent log
+            
             abs_path = os.path.abspath(file_path)
             abs_path = os.path.normpath(abs_path)
             abs_path = os.path.realpath(abs_path)
-            file_exists = os.path.isfile(abs_path)
-            file_size = os.path.getsize(abs_path) if file_exists else None
-            file_readable = os.access(abs_path, os.R_OK) if file_exists else None
-            log_debug("pptx_to_picture.py:109", "convert function entry", {"file_path": file_path, "abs_path": abs_path, "file_exists": file_exists, "file_size": file_size, "file_readable": file_readable, "path_encoding": abs_path.encode("utf-8", errors="replace").decode("utf-8")}, "A")
-            # #endregion
+            
+            if not os.path.isfile(abs_path):
+                raise FileNotFoundError(f"Datei nicht gefunden: {abs_path}")
+            if not os.access(abs_path, os.R_OK):
+                raise PermissionError(f"Keine Leseberechtigung für Datei: {abs_path}")
+            
+            # Validate file extension - only allow PowerPoint/PDF/ODP files
+            valid_extensions = ('.pptx', '.ppt', '.ppsx', '.pps', '.pdf', '.odp')
+            file_ext = os.path.splitext(abs_path)[1].lower()
+            if file_ext not in valid_extensions:
+                raise ValueError(f"Ungültiger Dateityp: {file_ext}. Unterstützte Formate: {', '.join(valid_extensions)}")
 
             pp = None
             pres = None
 
             try:
-                # #region agent log
-                log_debug("pptx_to_picture.py:117", "before CoInitializeEx", {"thread_id": threading.get_ident()}, "C")
-                # #endregion
                 try:
                     pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
                 except:
                     pythoncom.CoInitialize()
-                # #region agent log
-                log_debug("pptx_to_picture.py:117", "after CoInitialize/CoInitializeEx", {"success": True}, "C")
-                # #endregion
-                # #region agent log
-                log_debug("pptx_to_picture.py:118", "before PowerPoint.Dispatch", {}, "F")
-                # #endregion
                 pp = win32com.client.Dispatch("PowerPoint.Application")
-                # #region agent log
-                log_debug("pptx_to_picture.py:118", "after PowerPoint.Dispatch", {"pp_created": pp is not None}, "F")
-                # #endregion
                 pp.Visible = True
-                # #region agent log
-                log_debug("pptx_to_picture.py:120", "before Presentations.Open", {"file_path": abs_path, "path_type": type(abs_path).__name__, "path_repr": repr(abs_path)}, "A")
-                # #endregion
-                # Normalize path for PowerPoint COM - convert to string and ensure proper format
-                pptx_path = str(abs_path)
-                if not os.path.isabs(pptx_path):
-                    pptx_path = os.path.abspath(pptx_path)
+                # Normalize path for PowerPoint COM - ensure it's an absolute normalized path
+                pptx_path = os.path.abspath(abs_path)
                 pptx_path = os.path.normpath(pptx_path)
-                # #region agent log
-                log_debug("pptx_to_picture.py:120", "before Presentations.Open with normalized path", {"normalized_path": pptx_path}, "A")
-                # #endregion
-                pres = pp.Presentations.Open(pptx_path, ReadOnly=True, WithWindow=False)
-                # #region agent log
-                log_debug("pptx_to_picture.py:120", "after Presentations.Open", {"pres_created": pres is not None}, "A")
-                # #endregion
+                pptx_path = str(pptx_path)
+                # PowerPoint COM expects positional parameters with integer values (1/0) instead of boolean (True/False)
+                # Presentations.Open(FileName, ReadOnly, Untitled, WithWindow)
+                try:
+                    pres = pp.Presentations.Open(pptx_path, 1, 0, 0)
+                except Exception as open_error:
+                    # Fallback: try with just the filename
+                    try:
+                        pres = pp.Presentations.Open(pptx_path)
+                    except Exception as open_error2:
+                        raise open_error2
 
                 base = os.path.splitext(os.path.basename(file_path))[0]
                 temp_dir = tempfile.gettempdir()
@@ -215,12 +191,6 @@ class PPTXConverter:
 
         except Exception as e:
             import traceback
-            # #region agent log
-            try:
-                log_debug("pptx_to_picture.py:161", "exception caught", {"error": str(e), "error_type": type(e).__name__, "traceback": traceback.format_exc()}, "A")
-            except:
-                pass
-            # #endregion
             self.log_msg(f"Error: {str(e)}")
             self.log_msg(f"Traceback: {traceback.format_exc()}")
 
