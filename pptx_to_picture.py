@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import os
-from PIL import Image
+from PIL import Image, ImageTk
 import tempfile
 import win32com.client
 import pythoncom
@@ -29,6 +29,8 @@ class PPTXConverter:
         self.image_format = tk.StringVar(value="PNG")
         self.quality = tk.IntVar(value=95)
         self.number_slides = tk.BooleanVar(value=True)
+        self.current_preview_file = None
+        self.preview_photo = None
 
         self.setup_ui()
 
@@ -36,8 +38,12 @@ class PPTXConverter:
         main_frame = tk.Frame(self.root, bg='#1e1e1e')
         main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
+        main_frame.grid_columnconfigure(0, weight=1)
+        main_frame.grid_columnconfigure(1, weight=1)
+        main_frame.grid_columnconfigure(2, weight=1)
+
         left_panel = tk.LabelFrame(main_frame, text=" Drag & Drop Input Files", fg='white', bg='#2d2d2d', font=('Arial', 12, 'bold'))
-        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
 
         formats_text = "Supported:\n* .pptx .ppt .ppsx .pps\n* .pdf\n* .odp\n\n**Each slide/page -> individual image!**\n\nDrag files here or click button"
         tk.Label(left_panel, text=formats_text, bg='#2d2d2d', fg='#cccccc', font=('Arial', 10), justify=tk.LEFT).pack(pady=20, padx=20)
@@ -52,31 +58,50 @@ class PPTXConverter:
 
         tk.Button(left_panel, text=" SELECT FILES", command=self.select_files, bg='#0078d4', fg='white', font=('Arial', 12, 'bold'), pady=10).pack(pady=20)
 
-        right_panel = tk.LabelFrame(main_frame, text=" Output Settings", fg='white', bg='#2d2d2d', font=('Arial', 12, 'bold'))
-        right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(10, 0))
+        middle_panel = tk.LabelFrame(main_frame, text=" Output Settings", fg='white', bg='#2d2d2d', font=('Arial', 12, 'bold'))
+        middle_panel.grid(row=0, column=1, sticky="nsew", padx=5)
 
-        tk.Label(right_panel, text="Format:", bg='#2d2d2d', fg='white', font=('Arial', 11, 'bold')).pack(anchor=tk.W, padx=20, pady=(20, 5))
-        format_frame = tk.Frame(right_panel, bg='#2d2d2d')
+        tk.Label(middle_panel, text="Format:", bg='#2d2d2d', fg='white', font=('Arial', 11, 'bold')).pack(anchor=tk.W, padx=20, pady=(20, 5))
+        format_frame = tk.Frame(middle_panel, bg='#2d2d2d')
         format_frame.pack(fill=tk.X, padx=20, pady=5)
         for fmt in ['PNG', 'JPG', 'BMP']:
-            tk.Radiobutton(format_frame, text=fmt, variable=self.image_format, value=fmt, bg='#2d2d2d', fg='white', selectcolor='#0078d4').pack(side=tk.LEFT, padx=20)
+            tk.Radiobutton(format_frame, text=fmt, variable=self.image_format, value=fmt, bg='#2d2d2d', fg='white', selectcolor='#0078d4', command=lambda: self.update_settings_preview()).pack(side=tk.LEFT, padx=20)
 
-        tk.Label(right_panel, text="JPG Quality:", bg='#2d2d2d', fg='white', font=('Arial', 11, 'bold')).pack(anchor=tk.W, padx=20, pady=(20, 5))
-        self.quality_scale = tk.Scale(right_panel, from_=1, to=100, orient=tk.HORIZONTAL, variable=self.quality, bg='#2d2d2d', fg='white', troughcolor='#3d3d3d')
+        tk.Label(middle_panel, text="JPG Quality:", bg='#2d2d2d', fg='white', font=('Arial', 11, 'bold')).pack(anchor=tk.W, padx=20, pady=(20, 5))
+        self.quality_scale = tk.Scale(middle_panel, from_=1, to=100, orient=tk.HORIZONTAL, variable=self.quality, bg='#2d2d2d', fg='white', troughcolor='#3d3d3d', command=lambda x: self.update_settings_preview())
         self.quality_scale.pack(fill=tk.X, padx=20, pady=5)
 
-        tk.Checkbutton(right_panel, text="Number slides (slide_1, slide_2...)", variable=self.number_slides, bg='#2d2d2d', fg='white', selectcolor='#0078d4').pack(anchor=tk.W, padx=20, pady=10)
+        tk.Checkbutton(middle_panel, text="Number slides (slide_1, slide_2...)", variable=self.number_slides, bg='#2d2d2d', fg='white', selectcolor='#0078d4', command=lambda: self.update_settings_preview()).pack(anchor=tk.W, padx=20, pady=10)
 
-        tk.Label(right_panel, text="Output Directory:", bg='#2d2d2d', fg='white', font=('Arial', 11, 'bold')).pack(anchor=tk.W, padx=20, pady=(20, 5))
-        dir_frame = tk.Frame(right_panel, bg='#2d2d2d')
+        tk.Label(middle_panel, text="Output Directory:", bg='#2d2d2d', fg='white', font=('Arial', 11, 'bold')).pack(anchor=tk.W, padx=20, pady=(20, 5))
+        dir_frame = tk.Frame(middle_panel, bg='#2d2d2d')
         dir_frame.pack(fill=tk.X, padx=20, pady=5)
         self.dir_label = tk.Label(dir_frame, text=self.output_dir, bg='#3d3d3d', fg='#cccccc', relief=tk.SUNKEN, anchor=tk.W, padx=10, pady=5)
         self.dir_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
         tk.Button(dir_frame, text="Browse", command=self.browse_dir, bg='#0078d4', fg='white').pack(side=tk.RIGHT)
 
-        tk.Label(right_panel, text="Log:", bg='#2d2d2d', fg='white', font=('Arial', 11, 'bold')).pack(anchor=tk.W, padx=20, pady=(20, 5))
-        self.log = tk.Text(right_panel, height=15, bg='#3d3d3d', fg='white', state=tk.DISABLED)
+        tk.Label(middle_panel, text="Log:", bg='#2d2d2d', fg='white', font=('Arial', 11, 'bold')).pack(anchor=tk.W, padx=20, pady=(20, 5))
+        self.log = tk.Text(middle_panel, height=15, bg='#3d3d3d', fg='white', state=tk.DISABLED)
         self.log.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
+
+        preview_panel = tk.LabelFrame(main_frame, text=" Output Preview", fg='white', bg='#2d2d2d', font=('Arial', 12, 'bold'))
+        preview_panel.grid(row=0, column=2, sticky="nsew", padx=(5, 0))
+
+        preview_frame = tk.Frame(preview_panel, bg='#2d2d2d', height=320)
+        preview_frame.pack(fill=tk.X, pady=(10, 10), padx=10)
+        preview_frame.pack_propagate(False)
+        self.preview_label = tk.Label(preview_frame, text="No file selected\nDrag & drop a file to preview",
+                                       bg='#3d3d3d', fg='#cccccc', font=('Arial', 12), justify=tk.CENTER)
+        self.preview_label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        tk.Label(preview_panel, text="Output Files:", bg='#2d2d2d', fg='white', font=('Arial', 11, 'bold')).pack(anchor=tk.W, padx=20, pady=(10, 5))
+        list_frame = tk.Frame(preview_panel, bg='#2d2d2d')
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
+        self.file_list = tk.Listbox(list_frame, bg='#3d3d3d', fg='white', font=('Arial', 10))
+        self.file_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.file_list.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.file_list.config(yscrollcommand=scrollbar.set)
 
         if not DND_AVAILABLE:
             self.log_msg("Warning: tkinterdnd2 not installed. Drag & Drop disabled.")
@@ -88,22 +113,139 @@ class PPTXConverter:
         self.log.see(tk.END)
         self.log.config(state=tk.DISABLED)
 
+    def clear_preview(self):
+        self.preview_label.config(image="", text="No file selected\nDrag & drop a file to preview")
+        self.file_list.delete(0, tk.END)
+        self.current_preview_file = None
+
+    def update_preview(self, file_path):
+        try:
+            file_ext = os.path.splitext(file_path)[1].lower()
+
+            if file_ext == '.odp':
+                self.preview_label.config(image="", text=f"ODP File:\n{os.path.basename(file_path)}\n\nPreview not supported for ODP files")
+                slide_count = self.get_slide_count(file_path)
+                self.generate_output_list(file_path, slide_count)
+                self.current_preview_file = file_path
+                return
+
+            self.extract_preview_image(file_path)
+            slide_count = self.get_slide_count(file_path)
+            self.generate_output_list(file_path, slide_count)
+            self.current_preview_file = file_path
+
+        except Exception as e:
+            self.preview_label.config(image="", text=f"Preview error:\n{str(e)}")
+            self.file_list.delete(0, tk.END)
+
+    def extract_preview_image(self, file_path):
+        temp_dir = tempfile.gettempdir()
+        temp_img = os.path.join(temp_dir, "preview.jpg")
+        file_ext = os.path.splitext(file_path)[1].lower()
+
+        try:
+            if file_ext in ('.pptx', '.ppt', '.ppsx', '.pps'):
+                pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
+                pp = win32com.client.Dispatch("PowerPoint.Application")
+                pp.Visible = False
+
+                try:
+                    pptx_path = os.path.abspath(os.path.normpath(file_path))
+                    pres = pp.Presentations.Open(pptx_path, 1, 0, 0)
+                    pres.Slides(1).Export(temp_img, "JPG")
+                    pres.Close()
+                finally:
+                    pp.Quit()
+                    pythoncom.CoUninitialize()
+
+            elif file_ext == '.pdf':
+                from pdf2image import convert_from_path
+                images = convert_from_path(file_path, first_page=1, last_page=1, size=(400, None))
+                if images:
+                    images[0].save(temp_img, "JPEG")
+                else:
+                    raise Exception("No pages found in PDF")
+            else:
+                raise Exception("Unsupported format for preview")
+
+            img = Image.open(temp_img)
+            img.thumbnail((400, 300), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self.preview_photo = photo
+            self.preview_label.config(image=photo, text="")
+
+            os.remove(temp_img)
+
+        except Exception as e:
+            self.preview_label.config(image="", text=f"Preview error:\n{str(e)}")
+            if os.path.exists(temp_img):
+                os.remove(temp_img)
+
+    def get_slide_count(self, file_path):
+        file_ext = os.path.splitext(file_path)[1].lower()
+
+        if file_ext in ('.pptx', '.ppt', '.ppsx', '.pps'):
+            pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
+            pp = win32com.client.Dispatch("PowerPoint.Application")
+            pp.Visible = False
+
+            try:
+                pptx_path = os.path.abspath(os.path.normpath(file_path))
+                pres = pp.Presentations.Open(pptx_path, 1, 0, 0)
+                count = pres.Slides.Count
+                pres.Close()
+                return count
+            finally:
+                pp.Quit()
+                pythoncom.CoUninitialize()
+
+        elif file_ext == '.pdf':
+            try:
+                from pdf2image import pdfinfo_from_path
+                info = pdfinfo_from_path(file_path)
+                return info["Pages"]
+            except:
+                return 1
+
+        elif file_ext == '.odp':
+            return 1
+
+        return 1
+
+    def generate_output_list(self, file_path, slide_count):
+        self.file_list.delete(0, tk.END)
+
+        base = os.path.splitext(os.path.basename(file_path))[0]
+        ext = self.image_format.get().lower()
+
+        for i in range(1, slide_count + 1):
+            num = f"_slide_{i}" if self.number_slides.get() else ""
+            filename = f"{base}{num}.{ext}"
+            self.file_list.insert(tk.END, filename)
+
+    def update_settings_preview(self):
+        if hasattr(self, 'current_preview_file') and self.current_preview_file:
+            self.update_preview(self.current_preview_file)
+
     def browse_dir(self):
         dir = filedialog.askdirectory(initialdir=self.output_dir)
         if dir:
             self.output_dir = dir
             self.dir_label.config(text=dir)
+            self.update_settings_preview()
 
     def on_drop(self, event):
         if DND_AVAILABLE:
             files = self.root.tk.splitlist(event.data)
             for f in files:
                 if os.path.isfile(f):
+                    self.update_preview(f)
                     threading.Thread(target=self.convert, args=(f,), daemon=True).start()
 
     def select_files(self):
         files = filedialog.askopenfilenames(filetypes=[("PPTX", "*.pptx *.ppt *.ppsx *.pps *.pdf *.odp")])
         for f in files:
+            self.update_preview(f)
             threading.Thread(target=self.convert, args=(f,), daemon=True).start()
 
     def convert(self, file_path):
