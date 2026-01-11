@@ -1,5 +1,6 @@
+import customtkinter as ctk
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox
 import os
 from PIL import Image, ImageTk
 import tempfile
@@ -7,23 +8,30 @@ import win32com.client
 import pythoncom
 import threading
 
+# Configuration for CustomTkinter
+ctk.set_appearance_mode("Dark")  # Modes: "System" (standard), "Dark", "Light"
+ctk.set_default_color_theme("blue")  # Themes: "blue" (standard), "green", "dark-blue"
+
+DND_AVAILABLE = False
 try:
     from tkinterdnd2 import TkinterDnD, DND_FILES
     DND_AVAILABLE = True
 except ImportError:
-    DND_AVAILABLE = False
-    DND_FILES = None
+    pass
 
-class PPTXConverter:
+class PPTXConverter(ctk.CTk, TkinterDnD.DnDWrapper if DND_AVAILABLE else object):
     def __init__(self):
+        super().__init__()
+        
         if DND_AVAILABLE:
-            self.root = TkinterDnD.Tk()
-        else:
-            self.root = tk.Tk()
-        self.root.title("PPTX to Picture - Drag & Drop")
-        self.root.geometry("1400x800")
-        self.root.configure(bg='#1e1e1e')
-        self.root.resizable(True, True)
+            self.TkdndVersion = TkinterDnD._require(self)
+
+        self.title("PPTX to Picture - Modern Converter")
+        self.geometry("1100x700")
+        
+        # Configure grid layout (1x2)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
 
         self.output_dir = os.path.expanduser("~/Pictures")
         self.image_format = tk.StringVar(value="PNG")
@@ -35,87 +43,125 @@ class PPTXConverter:
         self.setup_ui()
 
     def setup_ui(self):
-        main_frame = tk.Frame(self.root, bg='#1e1e1e')
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        self.create_sidebar()
+        self.create_main_area()
 
-        main_frame.grid_columnconfigure(0, weight=1)
-        main_frame.grid_columnconfigure(1, weight=1)
-        main_frame.grid_columnconfigure(2, weight=1)
+    def create_sidebar(self):
+        self.sidebar_frame = ctk.CTkFrame(self, width=250, corner_radius=0)
+        self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
+        self.sidebar_frame.grid_rowconfigure(8, weight=1)
 
-        left_panel = tk.LabelFrame(main_frame, text=" Drag & Drop Input Files", fg='white', bg='#2d2d2d', font=('Arial', 12, 'bold'))
-        left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        logo_label = ctk.CTkLabel(self.sidebar_frame, text="PPTX > Picture", font=ctk.CTkFont(size=20, weight="bold"))
+        logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
 
-        formats_text = "Supported:\n* .pptx .ppt .ppsx .pps\n* .pdf\n* .odp\n\n**Each slide/page -> individual image!**\n\nDrag files here or click button"
-        tk.Label(left_panel, text=formats_text, bg='#2d2d2d', fg='#cccccc', font=('Arial', 10), justify=tk.LEFT).pack(pady=20, padx=20)
+        # Output Format
+        lbl_format = ctk.CTkLabel(self.sidebar_frame, text="Output Format:", anchor="w")
+        lbl_format.grid(row=1, column=0, padx=20, pady=(10, 0), sticky="w")
+        
+        self.format_menu = ctk.CTkSegmentedButton(self.sidebar_frame, values=["PNG", "JPG", "BMP"], 
+                                                  command=self.change_format_callback)
+        self.format_menu.set("PNG")
+        self.format_menu.grid(row=2, column=0, padx=20, pady=(5, 10), sticky="ew")
 
-        self.drop_zone = tk.Frame(left_panel, height=250, bg='#3d3d3d', relief=tk.GROOVE, bd=3)
-        self.drop_zone.pack(fill=tk.BOTH, expand=True, pady=10)
-        tk.Label(self.drop_zone, text="DROP FILES HERE", bg='#3d3d3d', fg='white', font=('Arial', 20, 'bold')).pack(expand=True)
+        # Quality (only valid/visible for JPG technically, but well keep it simple)
+        lbl_quality = ctk.CTkLabel(self.sidebar_frame, text="JPG Quality:", anchor="w")
+        lbl_quality.grid(row=3, column=0, padx=20, pady=(10, 0), sticky="w")
+        
+        self.quality_slider = ctk.CTkSlider(self.sidebar_frame, from_=1, to=100, variable=self.quality, number_of_steps=99)
+        self.quality_slider.grid(row=4, column=0, padx=20, pady=(5, 10), sticky="ew")
+
+        # Checkboxes
+        self.chk_numbering = ctk.CTkSwitch(self.sidebar_frame, text="Number Slides", variable=self.number_slides, command=self.update_settings_preview)
+        self.chk_numbering.grid(row=5, column=0, padx=20, pady=10, sticky="w")
+
+        # Output Directory
+        lbl_dir = ctk.CTkLabel(self.sidebar_frame, text="Output Directory:", anchor="w")
+        lbl_dir.grid(row=6, column=0, padx=20, pady=(10, 0), sticky="w")
+        
+        self.entry_dir = ctk.CTkEntry(self.sidebar_frame, placeholder_text=self.output_dir)
+        self.entry_dir.insert(0, self.output_dir)
+        self.entry_dir.configure(state="readonly") # Make read-only so they have to use browse
+        self.entry_dir.grid(row=7, column=0, padx=20, pady=(5, 5), sticky="ew")
+        
+        btn_browse = ctk.CTkButton(self.sidebar_frame, text="Browse Folder", command=self.browse_dir)
+        btn_browse.grid(row=8, column=0, padx=20, pady=5, sticky="n")
+
+        # Convert / Convert Button (maybe big at bottom?)
+        # Let's put a help text at bottom of sidebar
+        lbl_help = ctk.CTkLabel(self.sidebar_frame, text="Supported:\nPPTX, PPT, PDF, ODP", 
+                                font=ctk.CTkFont(size=12), text_color="gray")
+        lbl_help.grid(row=9, column=0, padx=20, pady=20, sticky="s")
+
+
+    def create_main_area(self):
+        self.main_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+        self.main_frame.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
+        
+        self.main_frame.grid_rowconfigure(0, weight=1) # Drop zone
+        self.main_frame.grid_rowconfigure(1, weight=1) # Preview/Log
+        self.main_frame.grid_columnconfigure(0, weight=1)
+
+        # -- Top: Drag & Drop Zone --
+        self.drop_frame = ctk.CTkFrame(self.main_frame, border_width=2, border_color="gray")
+        self.drop_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
+        
+        self.drop_label = ctk.CTkLabel(self.drop_frame, text="DRAG & DROP FILES HERE\n\nor click to select", 
+                                       font=ctk.CTkFont(size=20, weight="bold"))
+        self.drop_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        # Make the whole frame clickable for file selection
+        self.drop_label.bind("<Button-1>", lambda e: self.select_files())
+        self.drop_frame.bind("<Button-1>", lambda e: self.select_files())
 
         if DND_AVAILABLE:
-            self.drop_zone.drop_target_register(DND_FILES)
-            self.drop_zone.dnd_bind('<<Drop>>', self.on_drop)
+            self.drop_frame.drop_target_register(DND_FILES)
+            self.drop_frame.dnd_bind('<<Drop>>', self.on_drop)
 
-        tk.Button(left_panel, text=" SELECT FILES", command=self.select_files, bg='#0078d4', fg='white', font=('Arial', 12, 'bold'), pady=10).pack(pady=20)
+        # -- Bottom: Preview and Log Split --
+        self.bottom_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        self.bottom_frame.grid(row=1, column=0, sticky="nsew")
+        self.bottom_frame.grid_columnconfigure(0, weight=1) # Preview Image
+        self.bottom_frame.grid_columnconfigure(1, weight=1) # File List / Log
+        self.bottom_frame.grid_rowconfigure(0, weight=1)
 
-        middle_panel = tk.LabelFrame(main_frame, text=" Output Settings", fg='white', bg='#2d2d2d', font=('Arial', 12, 'bold'))
-        middle_panel.grid(row=0, column=1, sticky="nsew", padx=5)
+        # Preview Image Area
+        self.preview_box = ctk.CTkFrame(self.bottom_frame)
+        self.preview_box.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        
+        self.lbl_preview_img = ctk.CTkLabel(self.preview_box, text="No Preview Available")
+        self.lbl_preview_img.pack(fill="both", expand=True, padx=10, pady=10)
 
-        tk.Label(middle_panel, text="Format:", bg='#2d2d2d', fg='white', font=('Arial', 11, 'bold')).pack(anchor=tk.W, padx=20, pady=(20, 5))
-        format_frame = tk.Frame(middle_panel, bg='#2d2d2d')
-        format_frame.pack(fill=tk.X, padx=20, pady=5)
-        for fmt in ['PNG', 'JPG', 'BMP']:
-            tk.Radiobutton(format_frame, text=fmt, variable=self.image_format, value=fmt, bg='#2d2d2d', fg='white', selectcolor='#0078d4', command=lambda: self.update_settings_preview()).pack(side=tk.LEFT, padx=20)
+        # Right side of bottom: File List + Log
+        self.right_bottom_box = ctk.CTkFrame(self.bottom_frame)
+        self.right_bottom_box.grid(row=0, column=1, sticky="nsew")
+        
+        # Output File Preview List
+        ctk.CTkLabel(self.right_bottom_box, text="Output Files Preview:").pack(anchor="w", padx=10, pady=(5,0))
+        self.file_list_box = ctk.CTkTextbox(self.right_bottom_box, height=100)
+        self.file_list_box.pack(fill="x", padx=10, pady=5)
+        self.file_list_box.configure(state="disabled")
 
-        tk.Label(middle_panel, text="JPG Quality:", bg='#2d2d2d', fg='white', font=('Arial', 11, 'bold')).pack(anchor=tk.W, padx=20, pady=(20, 5))
-        self.quality_scale = tk.Scale(middle_panel, from_=1, to=100, orient=tk.HORIZONTAL, variable=self.quality, bg='#2d2d2d', fg='white', troughcolor='#3d3d3d', command=lambda x: self.update_settings_preview())
-        self.quality_scale.pack(fill=tk.X, padx=20, pady=5)
+        # Log
+        ctk.CTkLabel(self.right_bottom_box, text="Processing Log:").pack(anchor="w", padx=10, pady=(5,0))
+        self.log_box = ctk.CTkTextbox(self.right_bottom_box)
+        self.log_box.pack(fill="both", expand=True, padx=10, pady=5)
+        self.log_box.configure(state="disabled")
 
-        tk.Checkbutton(middle_panel, text="Number slides (slide_1, slide_2...)", variable=self.number_slides, bg='#2d2d2d', fg='white', selectcolor='#0078d4', command=lambda: self.update_settings_preview()).pack(anchor=tk.W, padx=20, pady=10)
-
-        tk.Label(middle_panel, text="Output Directory:", bg='#2d2d2d', fg='white', font=('Arial', 11, 'bold')).pack(anchor=tk.W, padx=20, pady=(20, 5))
-        dir_frame = tk.Frame(middle_panel, bg='#2d2d2d')
-        dir_frame.pack(fill=tk.X, padx=20, pady=5)
-        self.dir_label = tk.Label(dir_frame, text=self.output_dir, bg='#3d3d3d', fg='#cccccc', relief=tk.SUNKEN, anchor=tk.W, padx=10, pady=5)
-        self.dir_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        tk.Button(dir_frame, text="Browse", command=self.browse_dir, bg='#0078d4', fg='white').pack(side=tk.RIGHT)
-
-        tk.Label(middle_panel, text="Log:", bg='#2d2d2d', fg='white', font=('Arial', 11, 'bold')).pack(anchor=tk.W, padx=20, pady=(20, 5))
-        self.log = tk.Text(middle_panel, height=15, bg='#3d3d3d', fg='white', state=tk.DISABLED)
-        self.log.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
-
-        preview_panel = tk.LabelFrame(main_frame, text=" Output Preview", fg='white', bg='#2d2d2d', font=('Arial', 12, 'bold'))
-        preview_panel.grid(row=0, column=2, sticky="nsew", padx=(5, 0))
-
-        preview_frame = tk.Frame(preview_panel, bg='#2d2d2d', height=320)
-        preview_frame.pack(fill=tk.X, pady=(10, 10), padx=10)
-        preview_frame.pack_propagate(False)
-        self.preview_label = tk.Label(preview_frame, text="No file selected\nDrag & drop a file to preview",
-                                       bg='#3d3d3d', fg='#cccccc', font=('Arial', 12), justify=tk.CENTER)
-        self.preview_label.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-        tk.Label(preview_panel, text="Output Files:", bg='#2d2d2d', fg='white', font=('Arial', 11, 'bold')).pack(anchor=tk.W, padx=20, pady=(10, 5))
-        list_frame = tk.Frame(preview_panel, bg='#2d2d2d')
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
-        self.file_list = tk.Listbox(list_frame, bg='#3d3d3d', fg='white', font=('Arial', 10))
-        self.file_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.file_list.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.file_list.config(yscrollcommand=scrollbar.set)
-
-        if not DND_AVAILABLE:
-            self.log_msg("Warning: tkinterdnd2 not installed. Drag & Drop disabled.")
-            self.log_msg("Install with: pip install tkinterdnd2")
+    def change_format_callback(self, value):
+        self.image_format.set(value)
+        self.update_settings_preview()
 
     def log_msg(self, msg):
-        self.log.config(state=tk.NORMAL)
-        self.log.insert(tk.END, msg + '\n')
-        self.log.see(tk.END)
-        self.log.config(state=tk.DISABLED)
+        self.log_box.configure(state="normal")
+        self.log_box.insert("end", msg + '\n')
+        self.log_box.see("end")
+        self.log_box.configure(state="disabled")
 
     def clear_preview(self):
-        self.preview_label.config(image="", text="No file selected\nDrag & drop a file to preview")
-        self.file_list.delete(0, tk.END)
+        self.lbl_preview_img.configure(image=None, text="No Preview Available")
+        self.file_list_box.configure(state="normal")
+        self.file_list_box.delete("0.0", "end")
+        self.file_list_box.configure(state="disabled")
         self.current_preview_file = None
 
     def update_preview(self, file_path):
@@ -123,7 +169,7 @@ class PPTXConverter:
             file_ext = os.path.splitext(file_path)[1].lower()
 
             if file_ext == '.odp':
-                self.preview_label.config(image="", text=f"ODP File:\n{os.path.basename(file_path)}\n\nPreview not supported for ODP files")
+                self.lbl_preview_img.configure(image=None, text=f"ODP File:\n{os.path.basename(file_path)}\n(No Preview)")
                 slide_count = self.get_slide_count(file_path)
                 self.generate_output_list(file_path, slide_count)
                 self.current_preview_file = file_path
@@ -135,8 +181,10 @@ class PPTXConverter:
             self.current_preview_file = file_path
 
         except Exception as e:
-            self.preview_label.config(image="", text=f"Preview error:\n{str(e)}")
-            self.file_list.delete(0, tk.END)
+            self.lbl_preview_img.configure(image=None, text=f"Preview error:\n{str(e)}")
+            self.file_list_box.configure(state="normal")
+            self.file_list_box.delete("0.0", "end")
+            self.file_list_box.configure(state="disabled")
 
     def extract_preview_image(self, file_path):
         temp_dir = tempfile.gettempdir()
@@ -147,7 +195,12 @@ class PPTXConverter:
             if file_ext in ('.pptx', '.ppt', '.ppsx', '.pps'):
                 pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
                 pp = win32com.client.Dispatch("PowerPoint.Application")
-                pp.Visible = False
+                # Keep hidden is safer, but sometimes causes issues. Try hidden first.
+                try:
+                    pp.Visible = True # Sometimes needed for export to work reliably
+                    pp.WindowState = 2 # Minimize
+                except:
+                    pass
 
                 try:
                     pptx_path = os.path.abspath(os.path.normpath(file_path))
@@ -155,7 +208,10 @@ class PPTXConverter:
                     pres.Slides(1).Export(temp_img, "JPG")
                     pres.Close()
                 finally:
-                    pp.Quit()
+                    try:
+                        pp.Quit()
+                    except:
+                        pass
                     pythoncom.CoUninitialize()
 
             elif file_ext == '.pdf':
@@ -166,37 +222,48 @@ class PPTXConverter:
                 else:
                     raise Exception("No pages found in PDF")
             else:
-                raise Exception("Unsupported format for preview")
+                self.lbl_preview_img.configure(image=None, text="Format not supported for preview")
+                return
 
-            img = Image.open(temp_img)
-            img.thumbnail((400, 300), Image.Resampling.LANCZOS)
-            photo = ImageTk.PhotoImage(img)
-            self.preview_photo = photo
-            self.preview_label.config(image=photo, text="")
-
-            os.remove(temp_img)
+            if os.path.exists(temp_img):
+                img = Image.open(temp_img)
+                # Resize keeping aspect ratio to fit in preview box (approx 300x200)
+                # We can use CTkImage for high DPI support
+                ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(300, 225))
+                
+                self.lbl_preview_img.configure(image=ctk_img, text="")
+                self.preview_photo = ctk_img # Keep ref
+                
+                # Cleanup temp later, or let system handle it
+                # os.remove(temp_img) 
+            else:
+                 self.lbl_preview_img.configure(image=None, text="Preview generation failed")
 
         except Exception as e:
-            self.preview_label.config(image="", text=f"Preview error:\n{str(e)}")
-            if os.path.exists(temp_img):
-                os.remove(temp_img)
+            self.lbl_preview_img.configure(image=None, text=f"Preview error:\n{str(e)}")
 
     def get_slide_count(self, file_path):
         file_ext = os.path.splitext(file_path)[1].lower()
 
         if file_ext in ('.pptx', '.ppt', '.ppsx', '.pps'):
+            # Reuse logic (simplified for minimal com activity)
             pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
             pp = win32com.client.Dispatch("PowerPoint.Application")
-            pp.Visible = False
-
+            try: 
+                pp.Visible = True
+                pp.WindowState = 2
+            except: pass
+            
             try:
-                pptx_path = os.path.abspath(os.path.normpath(file_path))
-                pres = pp.Presentations.Open(pptx_path, 1, 0, 0)
+                pres = pp.Presentations.Open(os.path.abspath(file_path), 1, 0, 0)
                 count = pres.Slides.Count
                 pres.Close()
                 return count
+            except:
+                return 1
             finally:
-                pp.Quit()
+                try: pp.Quit()
+                except: pass
                 pythoncom.CoUninitialize()
 
         elif file_ext == '.pdf':
@@ -206,136 +273,121 @@ class PPTXConverter:
                 return info["Pages"]
             except:
                 return 1
-
-        elif file_ext == '.odp':
-            return 1
-
         return 1
 
     def generate_output_list(self, file_path, slide_count):
-        self.file_list.delete(0, tk.END)
+        self.file_list_box.configure(state="normal")
+        self.file_list_box.delete("0.0", "end")
 
         base = os.path.splitext(os.path.basename(file_path))[0]
         ext = self.image_format.get().lower()
 
+        text = ""
         for i in range(1, slide_count + 1):
             num = f"_slide_{i}" if self.number_slides.get() else ""
             filename = f"{base}{num}.{ext}"
-            self.file_list.insert(tk.END, filename)
+            text += filename + "\n"
+        
+        self.file_list_box.insert("0.0", text)
+        self.file_list_box.configure(state="disabled")
 
     def update_settings_preview(self):
         if hasattr(self, 'current_preview_file') and self.current_preview_file:
-            self.update_preview(self.current_preview_file)
+            self.generate_output_list(self.current_preview_file, self.get_slide_count(self.current_preview_file))
 
     def browse_dir(self):
         dir = filedialog.askdirectory(initialdir=self.output_dir)
         if dir:
             self.output_dir = dir
-            self.dir_label.config(text=dir)
+            self.entry_dir.configure(state="normal")
+            self.entry_dir.delete(0, "end")
+            self.entry_dir.insert(0, dir)
+            self.entry_dir.configure(state="readonly")
             self.update_settings_preview()
 
     def on_drop(self, event):
         if DND_AVAILABLE:
-            files = self.root.tk.splitlist(event.data)
+            files = self.Tk.splitlist(self, event.data)
             for f in files:
                 if os.path.isfile(f):
                     self.update_preview(f)
                     threading.Thread(target=self.convert, args=(f,), daemon=True).start()
 
     def select_files(self):
-        files = filedialog.askopenfilenames(filetypes=[("PPTX", "*.pptx *.ppt *.ppsx *.pps *.pdf *.odp")])
+        files = filedialog.askopenfilenames(filetypes=[("Files", "*.pptx *.ppt *.ppsx *.pps *.pdf *.odp")])
         for f in files:
             self.update_preview(f)
             threading.Thread(target=self.convert, args=(f,), daemon=True).start()
 
     def convert(self, file_path):
         try:
-            self.log_msg(f"Converting: {os.path.basename(file_path)}")
+            self.log_msg(f"START: {os.path.basename(file_path)}")
             
             abs_path = os.path.abspath(file_path)
-            abs_path = os.path.normpath(abs_path)
-            abs_path = os.path.realpath(abs_path)
             
-            if not os.path.isfile(abs_path):
-                raise FileNotFoundError(f"Datei nicht gefunden: {abs_path}")
-            if not os.access(abs_path, os.R_OK):
-                raise PermissionError(f"Keine Leseberechtigung für Datei: {abs_path}")
-            
-            # Validate file extension - only allow PowerPoint/PDF/ODP files
-            valid_extensions = ('.pptx', '.ppt', '.ppsx', '.pps', '.pdf', '.odp')
+            # PowerPoint / Conversion Logic (Similar to before)
             file_ext = os.path.splitext(abs_path)[1].lower()
-            if file_ext not in valid_extensions:
-                raise ValueError(f"Ungültiger Dateityp: {file_ext}. Unterstützte Formate: {', '.join(valid_extensions)}")
-
-            pp = None
-            pres = None
-
-            try:
-                try:
-                    pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
-                except:
-                    pythoncom.CoInitialize()
+            
+            if file_ext in ('.pptx', '.ppt', '.ppsx', '.pps'):
+                pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
                 pp = win32com.client.Dispatch("PowerPoint.Application")
-                pp.Visible = True
-                # Normalize path for PowerPoint COM - ensure it's an absolute normalized path
-                pptx_path = os.path.abspath(abs_path)
-                pptx_path = os.path.normpath(pptx_path)
-                pptx_path = str(pptx_path)
-                # PowerPoint COM expects positional parameters with integer values (1/0) instead of boolean (True/False)
-                # Presentations.Open(FileName, ReadOnly, Untitled, WithWindow)
+                try: 
+                    pp.Visible = True
+                    pp.WindowState = 2 # Minimize
+                except: pass
+
+                pres = None
                 try:
-                    pres = pp.Presentations.Open(pptx_path, 1, 0, 0)
-                except Exception as open_error:
-                    # Fallback: try with just the filename
-                    try:
-                        pres = pp.Presentations.Open(pptx_path)
-                    except Exception as open_error2:
-                        raise open_error2
+                    pres = pp.Presentations.Open(abs_path, 1, 0, 0)
+                    base = os.path.splitext(os.path.basename(file_path))[0]
+                    temp_dir = tempfile.gettempdir()
 
+                    for i in range(1, pres.Slides.Count + 1):
+                        temp_img = os.path.join(temp_dir, f"temp_{i}.jpg")
+                        pres.Slides(i).Export(temp_img, "JPG")
+
+                        img = Image.open(temp_img)
+                        num = f"_slide_{i}" if self.number_slides.get() else ""
+                        final = os.path.join(self.output_dir, f"{base}{num}.{self.image_format.get().lower()}")
+
+                        fmt = self.image_format.get()
+                        if fmt == "JPG":
+                            img.save(final, "JPEG", quality=self.quality.get())
+                        else:
+                            img.save(final, fmt)
+
+                        os.remove(temp_img)
+                        self.log_msg(f"  > Saved: {os.path.basename(final)}")
+
+                    pres.Close()
+                finally:
+                    try: pp.Quit()
+                    except: pass
+                    pythoncom.CoUninitialize()
+            
+            elif file_ext == '.pdf':
+                from pdf2image import convert_from_path
                 base = os.path.splitext(os.path.basename(file_path))[0]
-                temp_dir = tempfile.gettempdir()
-
-                for i in range(1, pres.Slides.Count + 1):
-                    temp_img = os.path.join(temp_dir, f"temp_{i}.jpg")
-                    pres.Slides(i).Export(temp_img, "JPG")
-
-                    img = Image.open(temp_img)
-                    num = f"_slide_{i}" if self.number_slides.get() else ""
+                images = convert_from_path(abs_path)
+                
+                for i, img in enumerate(images):
+                    num = f"_slide_{i+1}" if self.number_slides.get() else ""
                     final = os.path.join(self.output_dir, f"{base}{num}.{self.image_format.get().lower()}")
-
-                    if self.image_format.get() == "PNG":
-                        img.save(final, "PNG")
-                    elif self.image_format.get() == "JPG":
+                    
+                    fmt = self.image_format.get()
+                    if fmt == "JPG":
                         img.save(final, "JPEG", quality=self.quality.get())
                     else:
-                        img.save(final, self.image_format.get())
+                        img.save(final, fmt)
+                    self.log_msg(f"  > Saved: {os.path.basename(final)}")
 
-                    os.remove(temp_img)
-                    self.log_msg(f"  Saved: {os.path.basename(final)}")
-
-                self.log_msg(f"Done: {os.path.basename(file_path)}")
-
-            finally:
-                if pres:
-                    try:
-                        pres.Close()
-                    except:
-                        pass
-                if pp:
-                    try:
-                        pp.Quit()
-                    except:
-                        pass
-                try:
-                    pythoncom.CoUninitialize()
-                except:
-                    pass
+            self.log_msg(f"DONE: {os.path.basename(file_path)}")
 
         except Exception as e:
             import traceback
-            self.log_msg(f"Error: {str(e)}")
-            self.log_msg(f"Traceback: {traceback.format_exc()}")
+            self.log_msg(f"ERROR: {str(e)}")
+            print(traceback.format_exc())
 
 if __name__ == "__main__":
     app = PPTXConverter()
-    app.root.mainloop()
+    app.mainloop()
